@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Taco Kenny — The Full Game</title>
+<style>
+  :root{color-scheme:dark}
+  html,body{margin:0;height:100%;background:#120e0a;color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;overflow:hidden}
+  #wrap{height:100%;display:grid;place-items:center;background:radial-gradient(circle at 50% 25%,#392018,#0b0907 72%)}
+  canvas{width:min(100vw,177.777vh);height:min(56.25vw,100vh);image-rendering:pixelated;background:#78cfff;box-shadow:0 0 70px #000a;outline:none}
+  #hint{position:fixed;left:12px;bottom:10px;font-size:12px;opacity:.86;background:#000a;padding:8px 10px;border-radius:9px;pointer-events:none;max-width:calc(100vw - 24px)}
+  #touch{display:none;position:fixed;inset:auto 8px 8px 8px;justify-content:space-between;gap:10px;pointer-events:none}
+  #touch .cluster{display:flex;gap:8px;pointer-events:auto}
+  #touch button{width:54px;height:54px;border:0;border-radius:50%;background:#0009;color:#fff;font-weight:900;font-size:18px;touch-action:none;box-shadow:0 1px 0 #fff3 inset}
+  @media (pointer:coarse){#hint{display:none}#touch{display:flex}}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="game" width="960" height="540" tabindex="0" aria-label="Taco Kenny game canvas"></canvas></div>
+<div id="hint">Move A/D or ←/→ · Jump/Glide Z/Space · Punch X · Switch C · Hard Ground Pound ↓+Z · Pause P · Map: ←/→ + Enter · New save N</div>
+<div id="touch" aria-label="Touch controls">
+  <div class="cluster"><button data-k="arrowleft">◀</button><button data-k="arrowright">▶</button></div>
+  <div class="cluster"><button data-k="c">C</button><button data-k="x">X</button><button data-k="z">A</button></div>
+</div>
+<script>
+(() => {
+'use strict';
+const cv=document.getElementById('game'),ctx=cv.getContext('2d');
+ctx.imageSmoothingEnabled=false;
+const W=cv.width,H=cv.height;
+const keys=Object.create(null),pressed=Object.create(null);
+addEventListener('keydown',e=>{const k=e.key.toLowerCase();if(!keys[k])pressed[k]=true;keys[k]=true;if(['arrowleft','arrowright','arrowdown','arrowup',' ','z','x','c','enter'].includes(k))e.preventDefault();});
+addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
+for(const b of document.querySelectorAll('#touch button')){const k=b.dataset.k;b.addEventListener('pointerdown',e=>{e.preventDefault();if(!keys[k])pressed[k]=true;keys[k]=true;cv.focus();});for(const ev of ['pointerup','pointercancel','pointerleave'])b.addEventListener(ev,e=>{e.preventDefault();keys[k]=false;});}
+const down=(...ks)=>ks.some(k=>keys[k]), hit=(...ks)=>ks.some(k=>pressed[k]);
+function endFrame(){for(const k in pressed)delete pressed[k];}
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v)),lerp=(a,b,t)=>a+(b-a)*t;
+const overlap=(a,b)=>a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
+const SAVE_KEY='tacoKennyFullSaveV1';
+
+const WORLDS=[
+ {name:'Pueblo Picante',short:'PUEBLO',sky:'#73cfff',far:'#c96f4d',near:'#e9a363',ground:'#b96e3f',accent:'#f6d06a',hazard:'#9b3e2e',boss:'El Gordito',family:'Little Sis Taco',tag:'Home turf. Billy picked the wrong family.'},
+ {name:'Salsa Canyon',short:'SALSA',sky:'#f4a66e',far:'#a94736',near:'#d56a42',ground:'#8c553a',accent:'#ffcc4a',hazard:'#dc331f',boss:'Pepper Pete',family:'Little Bro Taco',tag:'Red rock, hot salsa, hotter tempers.'},
+ {name:'El Gran Mercado',short:'MERCADO',sky:'#72c4d7',far:'#d39a56',near:'#f0c277',ground:'#9b6242',accent:'#ee5c4d',hazard:'#b12c22',boss:'Señora Sizzle',family:'Big Sis Taco',tag:'A market after dark — and Billy owns the night shift.'},
+ {name:'Fiesta Fantasma',short:'FANTASMA',sky:'#33356f',far:'#4d3b72',near:'#6d4a7a',ground:'#57404d',accent:'#ffd66b',hazard:'#9e4ad0',boss:'Chef Calavera',family:'Cousin Taco',tag:'Candles, skeletons, and a deeply rude piñata.'},
+ {name:'Monte Queso',short:'QUESO',sky:'#a9def0',far:'#7e9cb0',near:'#d7c56f',ground:'#8f7950',accent:'#ffe767',hazard:'#edb628',boss:'The Monterey Jackal',family:'Mom Taco',tag:'Billy has industrialized cheese. Naturally.'},
+ {name:'Billywood',short:'BILLYWOOD',sky:'#88b7d9',far:'#596b78',near:'#9a7b63',ground:'#565b60',accent:'#f6c850',hazard:'#dc5252',boss:'Carmen Carbón',family:'Dad Taco',tag:'Fake streets, real traps, and cameras everywhere.'},
+ {name:'Big Butt Studios',short:'STUDIOS',sky:'#252837',far:'#383b4a',near:'#535466',ground:'#46454a',accent:'#ffe05d',hazard:'#e33e43',boss:'Big Butt Billy',family:'The Whole Taco Family',tag:'LIVE television. No pressure.'}
+];
+const LEVEL_NAMES=[
+ ['Taco Trouble','Agave Heights','Cactus Canyon'],
+ ['Salsa Run','Mesa Madness','Red River Ravine'],
+ ['Market Dash','Awning Alley','Midnight Mercado'],
+ ['Candlelight Crawl','Piñata Panic','Plaza Poltergeist'],
+ ['Cheese Please','Fondue Falls','The Big Grate'],
+ ['Backlot Blitz','Camera Chaos','Prime-Time Peril'],
+ ['Studio A-Go-Go','Sweeps Week','Live From Billywood']
+];
+const BOSS_TITLES=['The Luchador Sous-Chef','The Capsaicin Maniac','The Two-Spatula Terror','The Ghost Kitchen King','Executive Cheesemonger','Billy’s Number Two','The Celebrity Chef Himself'];
+
+function freshSave(){return{maxNode:0,selectedNode:0,giants:{},rescued:[],wins:0,bonusTok:0,punchBonus:0,supremeBonus:0};}
+let save;
+try{save=JSON.parse(localStorage.getItem(SAVE_KEY))||freshSave();}catch{save=freshSave();}
+function store(){try{localStorage.setItem(SAVE_KEY,JSON.stringify(save));}catch{}}
+
+let mode='title',paused=false,frame=0,cameraX=0,shake=0,banner='',bannerTimer=0,transition=0;
+let stage=null,stageNode=0,worldI=0,stageI=0,particles=[],projectiles=[],enemies=[],boss=null;
+let longestCombo=0,stageTokCollected=0,stageGiant=false;
+
+function nodeWorld(n){return Math.floor(n/4)}
+function nodeStage(n){return n%4}
+function nodeLabel(n){const w=nodeWorld(n),s=nodeStage(n);return s===3?`BOSS — ${WORLDS[w].boss}`:`${w+1}-${s+1} ${LEVEL_NAMES[w][s]}`}
+
+function showBanner(t,d=95){banner=t;bannerTimer=d}
+function rnd(seed){let x=Math.sin(seed*999.91)*43758.5453;return x-Math.floor(x)}
+function rr(x,y,w,h,r){ctx.beginPath();ctx.roundRect(x,y,w,h,r)}
+function textCenter(t,y,size=24,color='#fff',weight=800){ctx.textAlign='center';ctx.fillStyle=color;ctx.font=`${weight} ${size}px system-ui,sans-serif`;ctx.fillText(t,W/2,y);ctx.textAlign='left'}
+
+function makeStage(w,s){
+  const width=4700+w*120+s*160;
+  const theme=WORLDS[w];
+  const st={w,s,width,theme,platforms:[],breakables:[],floors:[],tokens:[],supremes:[],giants:[],checkpoints:[],hazards:[],finishX:width-170};
+  const gapCount=5+s+w%2;
+  let x=0;
+  for(let i=0;i<=gapCount;i++){
+    const seg=650+Math.floor(rnd(w*80+s*13+i)*260);
+    st.platforms.push({x,y:470,w:Math.min(seg,width-x),h:90,type:'ground'});
+    x+=seg;
+    if(i<gapCount){
+      const gap=95+Math.floor(rnd(w*50+s*17+i+9)*90);
+      st.hazards.push({x,y:485,w:gap,h:55,type:w===1?'salsa':w===4?'queso':w===6?'electric':'pit'});
+      x+=gap;
+    }
+    if(x>=width-500)break;
+  }
+  if(st.platforms.at(-1).x+st.platforms.at(-1).w<width)st.platforms.push({x:st.platforms.at(-1).x+st.platforms.at(-1).w,y:470,w:width-(st.platforms.at(-1).x+st.platforms.at(-1).w),h:90,type:'ground'});
+  for(let i=0;i<13+s*2;i++){
+    const px=320+i*((width-700)/(13+s*2))+Math.floor(rnd(i+w*31+s*11)*90)-45;
+    const py=[390,335,280][i%3];
+    st.platforms.push({x:px,y:py,w:115+(i%2)*35,h:22,type:['stone','awning','roof'][w%3]});
+  }
+  for(let i=0;i<5;i++){const bx=780+i*780+Math.floor(rnd(w*22+s*7+i)*130);st.breakables.push({x:bx,y:390,w:50,h:80,alive:true});}
+  for(let i=0;i<4;i++){const fx=1200+i*850+Math.floor(rnd(w*19+s*13+i)*130);st.floors.push({x:fx,y:448,w:90,h:22,alive:true});}
+  for(let i=0;i<Math.floor(width/170);i++){
+    const tx=180+i*150,ty=(i%5===2)?300:(i%5===3?350:420);
+    st.tokens.push({x:tx,y:ty,r:9,taken:false,bob:i*.7});
+  }
+  st.supremes.push({x:Math.floor(width*.72),y:235,taken:false});
+  const giantKey=`${w}-${s}`;
+  st.giants.push({x:Math.floor(width*.48),y:270,taken:!!save.giants[giantKey],key:giantKey});
+  st.checkpoints.push({x:Math.floor(width*.34),y:414,active:false},{x:Math.floor(width*.67),y:414,active:false});
+  return st;
+}
+
+function themeEnemyType(w,i){
+  const sets=[['bean','pepper','cactus'],['pepper','bean','salsa'],['bean','crate','pepper'],['skeleton','pinata','ghost'],['cheese','cactus','bean'],['camera','bean','robot'],['camera','robot','pepper']];
+  return sets[w][i%sets[w].length];
+}
+class Enemy{
+  constructor(x,y,type){this.x=x;this.y=y;this.w=34;this.h=34;this.vx=0;this.vy=0;this.type=type;this.dead=false;this.dir=-1;this.t=0;this.onGround=false;this.hp=['cactus','robot','crate'].includes(type)?2:1;this.flying=['ghost','pinata','camera'].includes(type);this.baseY=y;}
+  update(){
+    if(this.dead)return;this.t++;
+    if(this.flying){this.x+=this.dir*(this.type==='camera'?.7:1);this.y=this.baseY+Math.sin(this.t*.045)*35;if(this.t%210===0)this.dir*=-1;return;}
+    if(this.type==='pepper'){this.vx=0;if(this.onGround&&this.t%105===0)this.vy=-9.7;}
+    else if(this.type==='salsa'){this.vx=this.dir*1.25;if(this.t%125===0)this.vy=-6;}
+    else if(this.type==='cheese'){this.vx=this.dir*.65;if(this.t%150===0)this.dir*=-1;}
+    else{this.vx=this.dir*(this.type==='robot'?1.05:.72);if(this.t%185===0)this.dir*=-1;}
+    this.vy+=.48;moveEntity(this);if(this.y>650)this.dead=true;
+  }
+  hurt(power,dir){
+    if(this.dead)return;
+    if(this.type==='cactus'&&power<2){this.vx=dir*6;this.vy=-3;spark(this.x+17,this.y+12,'#9dff8c',7);return;}
+    this.hp-=power;this.vx=dir*(power>=2?11:7);this.vy=-4.5;
+    if(this.hp<=0){this.dead=true;burstFood(this.x+17,this.y+17);player.combo++;player.comboTimer=110;longestCombo=Math.max(longestCombo,player.combo);}
+  }
+  draw(){
+    if(this.dead)return;const x=this.x-cameraX,y=this.y;ctx.save();
+    if(this.type==='bean'){ctx.fillStyle='#7a3f21';rr(x,y,34,34,15);ctx.fill();ctx.fillStyle='#111';ctx.fillRect(x+4,y+8,26,8);ctx.fillStyle='#fff';ctx.fillRect(x+10,y+10,4,3);ctx.fillRect(x+21,y+10,4,3);}
+    else if(this.type==='pepper'||this.type==='salsa'){ctx.fillStyle=this.type==='pepper'?'#df3d2f':'#f35a35';ctx.beginPath();ctx.ellipse(x+17,y+19,13,17,.2,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#2d7d32';ctx.lineWidth=5;ctx.beginPath();ctx.moveTo(x+17,y+2);ctx.lineTo(x+22,y-5);ctx.stroke();}
+    else if(this.type==='cactus'){ctx.fillStyle='#39a852';rr(x+7,y,20,34,8);ctx.fill();ctx.fillStyle='#a8ed8f';for(let i=0;i<5;i++)ctx.fillRect(x+10+(i%2)*10,y+5+i*6,3,3);}
+    else if(this.type==='crate'){ctx.fillStyle='#9b6033';ctx.fillRect(x,y,34,34);ctx.strokeStyle='#e4b16b';ctx.lineWidth=3;ctx.strokeRect(x+4,y+4,26,26);ctx.beginPath();ctx.moveTo(x+5,y+5);ctx.lineTo(x+29,y+29);ctx.moveTo(x+29,y+5);ctx.lineTo(x+5,y+29);ctx.stroke();}
+    else if(this.type==='skeleton'){ctx.fillStyle='#eee7d6';ctx.beginPath();ctx.arc(x+17,y+12,11,0,Math.PI*2);ctx.fill();ctx.fillRect(x+10,y+20,14,11);ctx.fillStyle='#252132';ctx.fillRect(x+11,y+9,5,5);ctx.fillRect(x+20,y+9,5,5);}
+    else if(this.type==='pinata'){ctx.fillStyle='#d44f88';rr(x+2,y+5,30,22,6);ctx.fill();ctx.fillStyle='#ffd55e';ctx.fillRect(x+6,y+10,22,4);ctx.fillStyle='#57c0d8';ctx.fillRect(x+6,y+17,22,4);ctx.strokeStyle='#6e4a33';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(x+10,y+27);ctx.lineTo(x+7,y+35);ctx.moveTo(x+25,y+27);ctx.lineTo(x+28,y+35);ctx.stroke();}
+    else if(this.type==='ghost'){ctx.globalAlpha=.85;ctx.fillStyle='#d8ecff';ctx.beginPath();ctx.arc(x+17,y+15,15,Math.PI,0);ctx.lineTo(x+32,y+34);ctx.lineTo(x+24,y+29);ctx.lineTo(x+17,y+34);ctx.lineTo(x+10,y+29);ctx.lineTo(x+2,y+34);ctx.closePath();ctx.fill();}
+    else if(this.type==='cheese'){ctx.fillStyle='#f3cf4c';ctx.beginPath();ctx.moveTo(x,y+30);ctx.lineTo(x+33,y+26);ctx.lineTo(x+28,y+5);ctx.closePath();ctx.fill();ctx.fillStyle='#c99f2e';ctx.beginPath();ctx.arc(x+20,y+18,4,0,7);ctx.fill();}
+    else if(this.type==='camera'){ctx.fillStyle='#353b43';ctx.fillRect(x+2,y+9,27,20);ctx.fillStyle='#76d3ff';ctx.beginPath();ctx.arc(x+12,y+19,7,0,7);ctx.fill();ctx.fillStyle='#222';ctx.fillRect(x+29,y+14,7,10);}
+    else if(this.type==='robot'){ctx.fillStyle='#727b82';rr(x+3,y+4,28,29,5);ctx.fill();ctx.fillStyle='#ff5b5b';ctx.fillRect(x+9,y+10,5,5);ctx.fillRect(x+20,y+10,5,5);ctx.fillStyle='#333';ctx.fillRect(x+9,y+22,16,4);}
+    ctx.fillStyle='#111';if(!['bean','skeleton','camera','robot'].includes(this.type)){ctx.fillRect(x+10,y+13,4,4);ctx.fillRect(x+21,y+13,4,4);}ctx.restore();
+  }
+}
